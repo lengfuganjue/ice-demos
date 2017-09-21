@@ -114,22 +114,22 @@ function shutdown()
 //
 function performEventHandler(fn)
 {
-    return function()
+    return async function()
     {
-        Ice.Promise.try(() =>
-            {
-                return fn.call();
-            }
-        ).catch(ex =>
-            {
-                $("#output").val(ex.toString());
-            }
-        ).finally(() =>
-            {
-                setState(State.Idle);
-            });
+        try
+        {
+            await fn.call();
+        }
+        catch(ex)
+        {
+            $("#output").val(ex.toString());
+        }
+        finally
+        {
+            setState(State.Idle);
+        }
         return false;
-    };
+    }
 }
 
 const sayHelloClickHandler = performEventHandler(sayHello);

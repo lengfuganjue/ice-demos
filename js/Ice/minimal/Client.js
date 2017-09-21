@@ -1,4 +1,4 @@
-// **********************************************************************
+
 //
 // Copyright (c) 2003-2017 ZeroC, Inc. All rights reserved.
 //
@@ -7,9 +7,11 @@
 const Ice = require("ice").Ice;
 const Demo = require("./generated/Hello").Demo;
 
-let communicator;
-
-Ice.Promise.try(() =>
+(async function()
+{
+    let communicator;
+    let status = 0;
+    try
     {
         //
         // Initialize the communicator and create a proxy to the hello object.
@@ -24,24 +26,26 @@ Ice.Promise.try(() =>
         // Down-cast the proxy to the hello object interface and invoke
         // the sayHello method.
         //
-        return Demo.HelloPrx.checkedCast(communicator.stringToProxy("hello:tcp -h localhost -p 10000")).then(
-            hello => hello.sayHello());
+        const hello = await Demo.HelloPrx.checkedCast(communicator.stringToProxy("hello:tcp -h localhost -p 10000"));
+        await hello.sayHello();
     }
-).finally(() =>
+    catch(ex)
     {
-        //
-        // Destroy the communicator if required.
-        //
+        console.log(ex);
+        status = 1;
+    }
+    finally
+    {
         if(communicator)
         {
-            return communicator.destroy();
+            try
+            {
+                await communicator.destroy();
+            }
+            catch(ex)
+            {
+            }
         }
     }
-).catch(ex =>
-    {
-        //
-        // Handle any exceptions above.
-        //
-        console.log(ex.toString());
-        process.exit(1);
-    });
+    return satus;
+})().then(status => process.exit(status));

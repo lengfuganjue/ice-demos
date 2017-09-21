@@ -19,12 +19,14 @@ class CallbackReceiverI extends Demo.CallbackReceiver
     }
 }
 
-let communicator;
+(async function()
+{
+    let communicator;
 
-//
-// Exit on SIGINT or SIGBREAK
-//
-process.on(process.platform == "win32" ? "SIGBREAK" : "SIGINT", () =>
+    //
+    // Exit on SIGINT or SIGBREAK
+    //
+    process.on(process.platform == "win32" ? "SIGBREAK" : "SIGINT", () =>
     {
         if(communicator)
         {
@@ -32,55 +34,51 @@ process.on(process.platform == "win32" ? "SIGBREAK" : "SIGINT", () =>
         }
     });
 
-Ice.Promise.try(() =>
+    try
     {
         communicator = Ice.initialize(process.argv);
         if(process.argv.length > 2)
         {
-            throw("too many arguments");
+            throw new Error("too many arguments");
         }
         //
-        // Initialize the communicator and create a proxy to the sender object.
+        // Create a proxy to the sender object and down-cast the proxy to
+        // the Demo.CallbackSender interface.
         //
-        const proxy = communicator.stringToProxy("sender:tcp -p 10000");
+        const proxy = await Demo.CallbackSenderPrx.checkedCast(communicator.stringToProxy("sender:tcp -p 10000"));
+        //
+        // Create the client object adapter.
+        //
+        const adapter = await communicator.createObjectAdapter("");
 
         //
-        // Down-cast the proxy to the Demo.CallbackSender interface.
+        // Create a callback receiver servant and add it to
+        // the object adapter.
         //
-        return Demo.CallbackSenderPrx.checkedCast(proxy).then(server =>
-            {
-                //
-                // Create the client object adapter.
-                //
-                return communicator.createObjectAdapter("").then(adapter =>
-                    {
-                        //
-                        // Create a callback receiver servant and add it to
-                        // the object adapter.
-                        //
-                        const receiver = adapter.addWithUUID(new CallbackReceiverI());
+        const receiver = adapter.addWithUUID(new CallbackReceiverI());
 
-                        //
-                        // Set the connection adapter.
-                        //
-                        proxy.ice_getCachedConnection().setAdapter(adapter);
+        //
+        // Set the connection adapter.
+        //
+        proxy.ice_getCachedConnection().setAdapter(adapter);
 
-                        //
-                        // Register the client with the bidir server.
-                        //
-                        return server.addClient(receiver.ice_getIdentity());
-                    });
-            });
+        //
+        // Register the client with the bidir server.
+        //
+        await proxy.addClient(receiver.ice_getIdentity());
     }
-).catch(ex =>
+    catch(ex)
     {
         console.log(ex.toString());
-        Ice.Promise.try(() =>
+        if(communicator)
+        {
+            try
             {
-                if(communicator)
-                {
-                    return communicator.destroy();
-                }
+                await communicator.destroy();
             }
-        ).finally(() => process.exit(1));
-    });
+            catch(ex)
+            {
+            }
+        }
+    }
+})()

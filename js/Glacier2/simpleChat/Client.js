@@ -21,21 +21,31 @@ class ChatCallbackI extends Demo.ChatCallback
     }
 }
 
-let communicator;
-
-//
-// Destroy communicator on SIGINT so application
-// exit cleanly.
-//
-process.once("SIGINT", () =>
+(async function()
 {
-    if(communicator)
-    {
-        communicator.destroy().finally(() => process.exit(0));
-    }
-});
+    let communicator;
 
-Ice.Promise.try(() =>
+    async function destroy()
+    {
+        if(communicator)
+        {
+            try
+            {
+                await communicator.destroy();
+            }
+            catch(ex)
+            {
+            }
+        }
+    }
+    //
+    // Destroy communicator on SIGINT so application
+    // exit cleanly.
+    //
+    process.once("SIGINT", async () => destroy());
+
+    let status = 0;
+    try
     {
         //
         // Initialize the communicator with Ice.Default.Router property
@@ -46,172 +56,145 @@ Ice.Promise.try(() =>
         initData.properties.setProperty("Ice.Default.Router", "DemoGlacier2/router:tcp -p 4063 -h localhost");
         communicator = Ice.initialize(process.argv, initData);
 
-        function createSession()
+        async function createSession()
         {
-            return Ice.Promise.try(() =>
+            try
+            {
+                //
+                // Get a proxy to the default rotuer and down-cast it to Glacier2.Router
+                // interface to ensure Glacier2 server is available.
+                //
+                const router = await Glacier2.RouterPrx.checkedCast(communicator.getDefaultRouter());
+
+                console.log("This demo accepts any user-id / password combination.");
+                process.stdout.write("user id: ");
+                const id = await getline();
+                process.stdout.write("password: ");
+                const password = await getline();
+                const session = await router.createSession(id, password);
+
+                await runWithSession(router, Demo.ChatSessionPrx.uncheckedCast(session));
+                console.log("run with session end");
+            }
+            catch(ex)
+            {
+                if(ex instanceof Glacier2.PermissionDeniedException)
                 {
-                    //
-                    // Get a proxy to the default rotuer and down-cast it to Glacier2.Router
-                    // interface to ensure Glacier2 server is available.
-                    //
-                    return Glacier2.RouterPrx.checkedCast(communicator.getDefaultRouter()).then(router =>
-                        {
-                            console.log("This demo accepts any user-id / password combination.");
-                            process.stdout.write("user id: ");
-                            return getline().then(id =>
-                                {
-                                    process.stdout.write("password: ");
-                                    return getline().then(password => router.createSession(id, password));
-                                }).then(
-                                    session => runWithSession(router, Demo.ChatSessionPrx.uncheckedCast(session)),
-                                    ex =>
-                                    {
-                                        if(ex instanceof Glacier2.PermissionDeniedException)
-                                        {
-                                            console.log("permission denied:\n" + ex.reason);
-                                            return createSession();
-                                        }
-                                        else if(ex instanceof Glacier2.CannotCreateSessionException)
-                                        {
-                                            console.log("cannot create session:\n" + ex.reason);
-                                            return createSession();
-                                        }
-                                        else
-                                        {
-                                            throw ex;
-                                        }
-                                    });
-                        });
-                });
+                    console.log("permission denied:\n" + ex.reason);
+                    await createSession();
+                }
+                else if(ex instanceof Glacier2.CannotCreateSessionException)
+                {
+                    console.log("cannot create session:\n" + ex.reason);
+                    await createSession();
+                }
+                else
+                {
+                    throw ex;
+                }
+            }
         }
 
-        function runWithSession(router, session)
+        async function runWithSession(router, session)
         {
-            const p = new Ice.Promise();
-
-            let completed = false;
-
             //
             // Get the session timeout, the router client category and
             // create the client object adapter.
             //
-            // Use Ice.Promise.all to wait for the completion of all the
+            // Use Promise.all to wait for the completion of all the
             // calls.
             //
-            Ice.Promise.all([router.getACMTimeout(),
-                             router.getCategoryForClient(),
-                             communicator.createObjectAdapterWithRouter("", router)]
-            ).then(values =>
+            let [timeout, category, adapter] = await Promise.all([router.getACMTimeout(),
+                                                                  router.getCategoryForClient(),
+                                                                  communicator.createObjectAdapterWithRouter("", router)]);
+
+            //
+            // Use ACM heartbeat to keep session alive.
+            //
+            const connection = router.ice_getCachedConnection();
+            if(timeout > 0)
+            {
+                connection.setACM(timeout, undefined, Ice.ACMHeartbeat.HeartbeatAlways);
+            }
+
+            connection.setCloseCallback(() => console.log("Connection lost"));
+
+            //
+            // Create the ChatCallback servant and add it to the ObjectAdapter.
+            //
+            const callback = Demo.ChatCallbackPrx.uncheckedCast(
+                adapter.add(new ChatCallbackI(), new Ice.Identity("callback", category)));
+
+            //
+            // Set the chat session callback.
+            //
+            await session.setCallback(callback);
+
+            //
+            // The chat function sequantially reads stdin messages
+            // and send it to server using the session say method.
+            //
+            async function chat()
+            {
+                while(true)
                 {
-                    let [timeout, category, adapter] = values;
+                    process.stdout.write("==> ");
+                    const msg = await getline();
 
-                    //
-                    // Use ACM heartbeat to keep session alive.
-                    //
-                    const connection = router.ice_getCachedConnection();
-                    if(timeout > 0)
+                    if(msg == "/quit")
                     {
-                        connection.setACM(timeout, undefined, Ice.ACMHeartbeat.HeartbeatAlways);
-                    }
-
-                    connection.setCloseCallback(() =>
+                        //
+                        // We are not longer interested in being notified of
+                        // connection closure.
+                        //
+                        connection.setCloseCallback(null);
+                        if(communicator)
                         {
-                            if(!completed)
+                            try
                             {
-                                console.log("Connection lost");
+                                await communicator.destroy();
                             }
-                        });
-
-                    //
-                    // Create the ChatCallback servant and add it to the ObjectAdapter.
-                    //
-                    const callback = Demo.ChatCallbackPrx.uncheckedCast(
-                        adapter.add(new ChatCallbackI(), new Ice.Identity("callback", category)));
-
-                    //
-                    // Set the chat session callback.
-                    //
-                    return session.setCallback(callback);
-                }
-            ).then(() =>
-                {
-                    //
-                    // The chat function sequantially reads stdin messages
-                    // and send it to server using the session say method.
-                    //
-                    function chat()
-                    {
-                        process.stdout.write("==> ");
-                        return getline().then(msg =>
+                            catch(ex)
                             {
-                                if(msg == "/quit")
-                                {
-                                    completed = true;
-                                    p.resolve();
-                                }
-                                else if(msg.indexOf("/") === 0)
-                                {
-                                    console.log("enter /quit to exit.");
-                                }
-                                else
-                                {
-                                    return session.say(msg);
-                                }
                             }
-                        ).then(() =>
-                            {
-                                if(!completed)
-                                {
-                                    return chat();
-                                }
-                            }
-                        ).catch(ex => p.reject(ex));
+                        }
+                        break;
                     }
-
-                    //
-                    // Start the chat loop
-                    //
-                    return chat();
+                    else if(msg.indexOf("/") === 0)
+                    {
+                        console.log("enter /quit to exit.");
+                    }
+                    else
+                    {
+                        await session.say(msg);
+                    }
                 }
-            ).finally(() => router.destroySession() // Destroy the session.
-            ).catch(ex => p.reject(ex));
-
-            return p;
+            }
+            await chat();
         }
-        return createSession();
+        await createSession();
     }
-).finally(() =>
+    catch(ex)
     {
-        //
-        // Destroy the communicator if required.
-        //
-        if(communicator)
-        {
-            return communicator.destroy();
-        }
-    }
-).then(
-    () => process.exit(0),
-    ex =>
-    {
-        //
-        // Handle any exceptions above.
-        //
+        status = 1;
         console.log(ex);
-        process.exit(1);
-    });
+        await destroy();
+    }
+    return status;
+}()).then(status => process.exit(status));
 
 //
 // Asynchonously process stdin lines using a promise
 //
 function getline()
 {
-    const p = new Ice.Promise();
-    process.stdin.resume();
-    process.stdin.once("data", buffer =>
-        {
-            process.stdin.pause();
-            p.resolve(buffer.toString("utf-8").trim());
-        });
-    return p;
+    return new Promise((resolve, reject) =>
+                       {
+                           process.stdin.resume();
+                           process.stdin.once("data", buffer =>
+                                              {
+                                                  process.stdin.pause();
+                                                  resolve(buffer.toString("utf-8").trim());
+                                              });
+                       });
 }

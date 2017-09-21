@@ -25,42 +25,40 @@ const communicator = Ice.initialize();
 
 let connection;
 
-function start()
+async function start()
 {
     //
     // Create a proxy to the sender object.
     //
     const hostname = document.location.hostname || "127.0.0.1";
-    const str = communicator.stringToProxy("sender:ws -p 10002 -h " + hostname);
 
     //
     // Down-cast the proxy to the Demo.CallbackSender interface.
     //
-    return Demo.CallbackSenderPrx.checkedCast(str).then(server =>
-        {
-            //
-            // Create the client object adapter.
-            //
-            return communicator.createObjectAdapter("").then(adapter =>
-                {
-                    //
-                    // Create a callback receiver servant and add it to
-                    // the object adapter.
-                    //
-                    const receiver = adapter.addWithUUID(new CallbackReceiverI());
+    const server = await Demo.CallbackSenderPrx.checkedCast(
+        communicator.stringToProxy("sender:ws -p 10002 -h " + hostname));
 
-                    //
-                    // Set the connection adapter and remember the connection.
-                    //
-                    connection = server.ice_getCachedConnection();
-                    connection.setAdapter(adapter);
+    //
+    // Create the client object adapter.
+    //
+    const adapter = await communicator.createObjectAdapter("");
 
-                    //
-                    // Register the client with the bidir server.
-                    //
-                    return server.addClient(receiver.ice_getIdentity());
-                });
-        });
+    //
+    // Create a callback receiver servant and add it to
+    // the object adapter.
+    //
+    const receiver = adapter.addWithUUID(new CallbackReceiverI());
+
+    //
+    // Set the connection adapter and remember the connection.
+    //
+    connection = server.ice_getCachedConnection();
+    connection.setAdapter(adapter);
+
+    //
+    // Register the client with the bidir server.
+    //
+    await server.addClient(receiver.ice_getIdentity());
 }
 
 function stop()
@@ -76,29 +74,47 @@ function stop()
 // Setup button click handlers
 //
 $("#start").click(() =>
-    {
-        if(isDisconnected())
-        {
-            setState(State.Connecting);
-            Ice.Promise.try(() => start().then(() => setState(State.Connected))).catch(ex =>
-                {
-                    $("#output").val(ex.toString());
-                    setState(State.Disconnected);
-                });
-        }
-        return false;
-    });
+                  {
+                      (async function()
+                      {
+                          if(isDisconnected())
+                          {
+                              setState(State.Connecting);
+                              try
+                              {
+                                  await start();
+                                  setState(State.Connected);
+                              }
+                              catch(ex)
+                              {
+                                  $("#output").val(ex.toString());
+                                  setState(State.Disconnected);
+                              }
+                          }
+                      }());
+                      return false;
+                  });
 
 $("#stop").click(() =>
     {
         if(isConnected())
         {
             setState(State.Disconnecting);
-            Ice.Promise.try(() => stop()).catch(ex => $("#output").val(ex.toString())).finally(
-                () =>
+            (async function()
+            {
+                try
+                {
+                    await stop();
+                }
+                catch(ex)
+                {
+                    $("#output").val(ex.toString());
+                }
+                finally
                 {
                     setState(State.Disconnected);
-                });
+                }
+            }());
         }
         return false;
     });

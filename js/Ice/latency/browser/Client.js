@@ -14,7 +14,7 @@ const communicator = Ice.initialize();
 //
 // Run the latency test.
 //
-function run()
+async function run()
 {
     const hostname = document.location.hostname || "127.0.0.1";
     const secure = document.location.protocol.indexOf("https") != -1;
@@ -27,21 +27,19 @@ function run()
     // Create a proxy to the ping object and down-cast the proxy
     // to the Demo.Ping interface.
     //
-    return Demo.PingPrx.checkedCast(communicator.stringToProxy(ref)).then(ping =>
-        {
-            writeLine("pinging server " + repetitions + " times (this may take a while)");
-            const start = new Date().getTime();
-            return loop(() => ping.ice_ping(), repetitions).then(() =>
-                {
-                    //
-                    // Write the results.
-                    //
-                    const total = new Date().getTime() - start;
-                    writeLine("time for " + repetitions + " pings: " + total + "ms");
-                    writeLine("time per ping: " + (total / repetitions) + "ms");
-                    setState(State.Idle);
-                });
-        });
+    let ping = await Demo.PingPrx.checkedCast(communicator.stringToProxy(ref));
+
+    writeLine("pinging server " + repetitions + " times (this may take a while)");
+    const start = new Date().getTime();
+    for(let i = 0; i < repetitions; ++i)
+    {
+        ping.ice_ping();
+    }
+
+    const total = new Date().getTime() - start;
+    writeLine("time for " + repetitions + " pings: " + total + "ms");
+    writeLine("time per ping: " + (total / repetitions) + "ms");
+    setState(State.Idle);
 }
 
 //
@@ -52,42 +50,27 @@ $("#run").click(() =>
         //
         // Run the latency loop if not already running.
         //
-        if(state !== State.Running)
+        (async function()
         {
-            setState(State.Running);
-
-            Ice.Promise.try(() =>
+            if(state !== State.Running)
+            {
+                setState(State.Running);
+                try
                 {
-                    return run();
+                    await run();
                 }
-            ).catch(ex =>
+                catch(ex)
                 {
                     $("#output").val(ex.toString());
                 }
-            ).finally(() =>
+                finally
                 {
                     setState(State.Idle);
-                });
-        }
+                }
+            }
+        }());
         return false;
     });
-
-//
-// Asynchronous loop: each call to the given function returns a
-// promise that when fulfilled runs the next iteration.
-//
-function loop(fn, repetitions)
-{
-    let i = 0;
-    function next()
-    {
-        if(i++ < repetitions)
-        {
-            return fn.call().then(next);
-        }
-    };
-    return next();
-}
 
 //
 // Helper function to write the output.
